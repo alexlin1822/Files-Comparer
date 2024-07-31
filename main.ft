@@ -42,47 +42,49 @@ resource "aws_iam_role_policy" "lambda_policy" {
 
 resource "aws_lambda_function" "my_lambda" {
   filename         = "lambda_function_payload.zip" # Replace with your Lambda function deployment package
-  function_name    = "my_lambda_function"
+  function_name    = var.lambda_function_name
   role             = aws_iam_role.lambda_execution_role.arn
   handler          = "lambda_function.lambda_handler" # Replace with your function handler
   runtime          = "python3.8" # Replace with your runtime
   source_code_hash = filebase64sha256("lambda_function_payload.zip")
 }
 
-resource "aws_cloudwatch_event_rule" "every_day_at_noon" {
-  name                = "every_day_at_noon"
-  schedule_expression = "cron(0 12 * * ? *)"
+# Iterate over the map of event schedules to create event rules and targets
+resource "aws_cloudwatch_event_rule" "event_rule" {
+  for_each            = var.event_schedules
+  name                = each.key
+  schedule_expression = each.value
 }
 
-resource "aws_cloudwatch_event_rule" "every_monday_at_midnight" {
-  name                = "every_monday_at_midnight"
-  schedule_expression = "cron(0 0 ? * MON *)"
-}
-
-resource "aws_cloudwatch_event_target" "target_noon" {
-  rule      = aws_cloudwatch_event_rule.every_day_at_noon.name
-  target_id = "lambda-noon"
+resource "aws_cloudwatch_event_target" "event_target" {
+  for_each  = aws_cloudwatch_event_rule.event_rule
+  rule      = each.key
+  target_id = "lambda-${each.key}"
   arn       = aws_lambda_function.my_lambda.arn
 }
 
-resource "aws_cloudwatch_event_target" "target_monday" {
-  rule      = aws_cloudwatch_event_rule.every_monday_at_midnight.name
-  target_id = "lambda-monday"
-  arn       = aws_lambda_function.my_lambda.arn
-}
-
-resource "aws_lambda_permission" "allow_noon_trigger" {
-  statement_id  = "AllowExecutionFromCloudWatchNoon"
+resource "aws_lambda_permission" "allow_event_trigger" {
+  for_each      = aws_cloudwatch_event_rule.event_rule
+  statement_id  = "AllowExecutionFromCloudWatch-${each.key}"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.my_lambda.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.every_day_at_noon.arn
+  source_arn    = each.value.arn
 }
 
-resource "aws_lambda_permission" "allow_monday_trigger" {
-  statement_id  = "AllowExecutionFromCloudWatchMonday"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.my_lambda.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.every_monday_at_midnight.arn
+
+#############
+variable "lambda_function_name" {
+  description = "The name of the Lambda function"
+  type        = string
+  default     = "my_lambda_function"
+}
+
+variable "event_schedules" {
+  description = "Map of event names and their schedules"
+  type = map(string)
+  default = {
+    "every_day_at_noon" = "cron(0 12 * * ? *)"
+    "every_monday_at_midnight" = "cron(0 0 ? * MON *)"
+  }
 }
